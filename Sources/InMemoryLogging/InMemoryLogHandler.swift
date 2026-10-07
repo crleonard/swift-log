@@ -111,9 +111,14 @@ public struct InMemoryLogHandler: LogHandler {
         }
 
         fileprivate func clear() {
-            self.lock.withLockVoid {
-                _entries.removeAll()
+            let entries = self.lock.withLock {
+                let entries = self._entries
+                self._entries = []
+                return entries
             }
+            // Errors and metadata can run arbitrary code in deinit, including
+            // logging to this store. Keep them alive until the lock is released.
+            withExtendedLifetime(entries) {}
         }
 
         var entries: [Entry] {

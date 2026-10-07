@@ -16,6 +16,10 @@ import InMemoryLogging
 import Logging
 import Testing
 
+#if canImport(Dispatch)
+import Dispatch
+#endif
+
 struct InMemoryLogHandlerTests {
     @Test
     func collectsLogs() {
@@ -69,6 +73,47 @@ struct InMemoryLogHandlerTests {
         #expect(logHandler.entries[0].message == "hello2")
         #expect(logHandler.entries[0].metadata == [:])
     }
+
+    #if canImport(Dispatch)
+    @Test(arguments: [false, true])
+    func clearReleasesEntriesOutsideLock(asError: Bool) {
+        let (logHandler, logger) = self.makeTestLogger()
+        let completed = DispatchSemaphore(value: 0)
+        let onDeinit: @Sendable () -> Void = {
+            // Use another thread and a bounded wait so a lock regression fails
+            // without crashing or permanently blocking the test process.
+            DispatchQueue.global().async {
+                #expect(logHandler.entries.isEmpty)
+                logger.info("logged during deinit")
+                completed.signal()
+            }
+            #expect(completed.wait(timeout: .now() + 5) == .success)
+        }
+
+        if asError {
+            logger.info("original", error: LogOnDeinit(onDeinit: onDeinit))
+        } else {
+            logger.info("original", metadata: ["object": .stringConvertible(LogOnDeinit(onDeinit: onDeinit))])
+        }
+
+        logHandler.clear()
+        #expect(logHandler.entries.map(\.message) == ["logged during deinit"])
+    }
+
+    private final class LogOnDeinit: Error, CustomStringConvertible {
+        let onDeinit: @Sendable () -> Void
+
+        init(onDeinit: @escaping @Sendable () -> Void) {
+            self.onDeinit = onDeinit
+        }
+
+        var description: String { "LogOnDeinit" }
+
+        deinit {
+            self.onDeinit()
+        }
+    }
+    #endif
 
     @Test
     func metadataWithAttributesIsPreservedInEntry() {
